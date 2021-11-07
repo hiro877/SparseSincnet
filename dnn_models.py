@@ -5,6 +5,14 @@ import torch.nn as nn
 import sys
 from torch.autograd import Variable
 import math
+from nupic.torch.modules import (
+    Flatten,
+    KWinners,
+    SparseWeights,
+    SparseWeightsSincnet,
+    KWinners1d,
+    SparseWeightsSincnetFunctionConv,
+)
 
 def flip(x, dim):
     xsize = x.size()
@@ -278,7 +286,15 @@ class MLP(nn.Module):
         self.act = nn.ModuleList([])
         self.drop = nn.ModuleList([])
        
-
+        self.use_kwinners = options['use_kwinners']
+        self.kwinners = nn.ModuleList([])
+        self.sparsity = options['sparsity']
+        # K-Winners parameters
+        self.percent_on = options['percent_on']
+        # self.boost_strength = options['boost_strength']
+        # self.boost_strength_factor = options['boost_strength_factor']
+        # self.k_inference_factor = options['k_inference_factor']
+        # self.duty_cycle_period = options['duty_cycle_period']
        
         # input layer normalization
         if self.fc_use_laynorm_inp:
@@ -320,11 +336,24 @@ class MLP(nn.Module):
          # weight initialization
          self.wx[i].weight = torch.nn.Parameter(torch.Tensor(self.fc_lay[i],current_input).uniform_(-np.sqrt(0.01/(current_input+self.fc_lay[i])),np.sqrt(0.01/(current_input+self.fc_lay[i]))))
          self.wx[i].bias = torch.nn.Parameter(torch.zeros(self.fc_lay[i]))
-         
+
+         if self.use_kwinners:
+             # SparseEeights
+             self.wx[i] = SparseWeights(self.wx[i], sparsity=self.sparsity)
+             # KWinners
+             self.kwinners.append(KWinners(
+                   n=self.fc_lay[i],
+                   percent_on=self.percent_on ,
+                   k_inference_factor=1.0,
+                   boost_strength_factor=0.9,
+                   duty_cycle_period=250,))
+
          current_input=self.fc_lay[i]
          
          
     def forward(self, x):
+      if self.use_kwinners:
+          return self.forawrd_use_kwinners(x)
         
       # Applying Layer/Batch Norm
       if bool(self.fc_use_laynorm_inp):
@@ -358,6 +387,44 @@ class MLP(nn.Module):
           
       return x
 
+    def forawrd_use_kwinners(self, x):
+        # Applying Layer/Batch Norm
+        if bool(self.fc_use_laynorm_inp):
+            x = self.ln0((x))
+
+        if bool(self.fc_use_batchnorm_inp):
+            x = self.bn0((x))
+
+        for i in range(self.N_fc_lay):
+
+            if self.fc_act[i] != 'linear':
+
+                if self.fc_use_laynorm[i]:
+                    x = self.drop[i](x = self.act[i](self.ln[i](self.kwinners[i](self.wx[i](x))))) # Drop
+                    # x = self.act[i](self.ln[i](self.kwinners[i](self.wx[i](x))))
+
+                if self.fc_use_batchnorm[i]:
+                    x = self.drop[i](self.act[i](self.bn[i](self.kwinners[i](self.wx[i](x))))) # Drop
+                    # x = self.act[i](self.bn[i](self.kwinners[i](self.wx[i](x))))
+
+                if self.fc_use_batchnorm[i] == False and self.fc_use_laynorm[i] == False:
+                    x = self.drop[i](self.act[i](self.kwinners[i](self.wx[i](x)))) # Drop
+                    # x = self.act[i](self.kwinners[i](self.wx[i](x)))
+
+            else:
+                if self.fc_use_laynorm[i]:
+                    x = self.drop[i](self.ln[i](self.kwinners[i](self.wx[i](x)))) # Drop
+                    # x = self.ln[i](self.kwinners[i](self.wx[i](x)))
+
+                if self.fc_use_batchnorm[i]:
+                    x = self.drop[i](self.bn[i](self.kwinners[i](self.wx[i](x)))) # Drop
+                    # x = self.bn[i](self.kwinners[i](self.wx[i](x)))
+
+                if self.fc_use_batchnorm[i] == False and self.fc_use_laynorm[i] == False:
+                    x = self.drop[i](self.kwinners[i](self.wx[i](x))) # Drop
+                    # x = self.kwinners[i](self.wx[i](x))
+
+        return x
 
 
 class SincNet(nn.Module):
@@ -388,7 +455,11 @@ class SincNet(nn.Module):
        self.ln  = nn.ModuleList([])
        self.act = nn.ModuleList([])
        self.drop = nn.ModuleList([])
-       
+
+       self.use_kwinners = options['use_kwinners']
+       self.kwinners = nn.ModuleList([])
+       # Kwinners Parameters
+       cnn_percent_on = (0.1, 0.5, 0.6)
              
        if self.cnn_use_laynorm_inp:
            self.ln0=LayerNorm(self.input_dim)
@@ -417,12 +488,36 @@ class SincNet(nn.Module):
 
          if i==0:
           self.conv.append(SincConv_fast(self.cnn_N_filt[0],self.cnn_len_filt[0],self.fs))
+          # KWinners1d
+          self.kwinners.append(KWinners1d(
+              channels=self.cnn_N_filt[i],
+              percent_on=0.7,
+              k_inference_factor=1.0,
+              boost_strength=1.5,
+              boost_strength_factor=1.0,
+              duty_cycle_period=250,
+              local=True, ))
               
          else:
-          self.conv.append(nn.Conv1d(self.cnn_N_filt[i-1], self.cnn_N_filt[i], self.cnn_len_filt[i]))
+          if not self.use_kwinners:
+            self.conv.append(nn.Conv1d(self.cnn_N_filt[i-1], self.cnn_N_filt[i], self.cnn_len_filt[i]))
+          else:
+            # SparseWeightsSincnet
+            self.conv.append(SparseWeightsSincnet(nn.Conv1d(self.cnn_N_filt[i-1], self.cnn_N_filt[i], self.cnn_len_filt[i]), sparsity=0.5))
+
+          # KWinners1d
+          self.kwinners.append(KWinners1d(
+                channels=self.cnn_N_filt[i],
+                percent_on=cnn_percent_on[i],
+                k_inference_factor=1.0,
+                boost_strength=1.5,
+                boost_strength_factor=1.0,
+                duty_cycle_period=250,
+                local=True,))
+         
+  
           
          current_input=int((current_input-self.cnn_len_filt[i]+1)/self.cnn_max_pool_len[i])
-
          
        self.out_dim=current_input*N_filt
 
@@ -445,10 +540,24 @@ class SincNet(nn.Module):
            
          if self.cnn_use_laynorm[i]:
           if i==0:
-           x = self.drop[i](self.act[i](self.ln[i](F.max_pool1d(torch.abs(self.conv[i](x)), self.cnn_max_pool_len[i]))))  
+           if not self.use_kwinners:
+            x = self.drop[i](self.act[i](self.ln[i](F.max_pool1d(torch.abs(self.conv[i](x)), self.cnn_max_pool_len[i]))))
+           else:
+            x = self.act[i](self.ln[i](F.max_pool1d(self.kwinners[i](torch.abs(self.conv[i](x))), self.cnn_max_pool_len[i])))
           else:
-           x = self.drop[i](self.act[i](self.ln[i](F.max_pool1d(self.conv[i](x), self.cnn_max_pool_len[i]))))   
-          
+           if not self.use_kwinners:
+            x = self.drop[i](self.act[i](self.ln[i](F.max_pool1d(self.conv[i](x), self.cnn_max_pool_len[i]))))
+           else:
+            x = self.act[i](self.ln[i](F.max_pool1d(self.kwinners[i](self.conv[i](x)), self.cnn_max_pool_len[i])))
+            # ta = self.conv[i]
+            # ta_weight = ta.weight.data.to('cpu').detach().numpy().copy()
+            # if i==1:
+            #     ta_weight = np.reshape(ta_weight, (60, 400))
+            # elif i==2:
+            #     ta_weight = np.reshape(ta_weight, (60, 300))
+            # np.savetxt('ta_weight.csv', ta_weight)
+            # print(np.count_nonzero(ta_weight))
+
          if self.cnn_use_batchnorm[i]:
           x = self.drop[i](self.act[i](self.bn[i](F.max_pool1d(self.conv[i](x), self.cnn_max_pool_len[i]))))
 
@@ -457,7 +566,7 @@ class SincNet(nn.Module):
 
        
        x = x.view(batch,-1)
-
+       # sys.exit()
        return x
    
 

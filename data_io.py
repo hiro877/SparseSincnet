@@ -74,6 +74,7 @@ def read_conf():
  options.N_batches=Config.get('optimization', 'N_batches')
  options.N_eval_epoch=Config.get('optimization', 'N_eval_epoch')
  options.seed=Config.get('optimization', 'seed')
+ options.use_kwinners=Config.get('optimization', 'use_kwinners')
  
  return options
 

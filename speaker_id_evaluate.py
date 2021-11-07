@@ -29,13 +29,25 @@ from data_io import ReadList,read_conf,str_to_bool
 import matplotlib.pyplot as plt
 from nupic.torch.modules import rezero_weights, update_boost_strength
 
+class AddNoise(object):
+    """Blend random noise into the sample.
+    A' = A * (1 - alpha) + alpha * noise
+    noise is random uniform in the range [-max_val, max_val]
+    """
+
+    def __init__(self, alpha=0.0, max_val=1.0):
+        self.alpha = alpha
+        self.max_val = max_val
+
+    def __call__(self, data):
+        # samples = data
+        noise_vector = np.random.uniform(
+            -self.max_val, self.max_val, data.size
+        )
+        return data * (1 - self.alpha) + noise_vector * self.alpha
+
 def plot_filter(cnn_net):
     sincnet = cnn_net.conv[0]
-    # cnnnet1 = cnn_net.conv[1]
-    # cnnnet2 = cnn_net.conv[2]
-    # print(cnnnet1.weight)
-    # print("================================")
-    # print(cnnnet2.weight)
 
     filter_num = 1
     F_amplitude_all = np.zeros(126)
@@ -91,7 +103,7 @@ def create_batches_rnd(batch_size,data_folder,wav_lst,N_snt,wlen,lab_dict,fact_a
  inp=Variable(torch.from_numpy(sig_batch).float().cuda().contiguous())
  lab=Variable(torch.from_numpy(lab_batch).float().cuda().contiguous())
   
- return inp,lab
+ return inp,lab  
 
 
 
@@ -237,7 +249,7 @@ DNN2_arch = {'input_dim':fc_lay[-1] ,
           'fc_use_batchnorm_inp':class_use_batchnorm_inp,
           'fc_act': class_act,
           'use_kwinners': use_kwinners,
-          'sparsity': 0.8, #0.3
+          'sparsity': 0.8, #"0.3"
           'percent_on': 0.6,
           # 'boost_strength': 1.0,
           # 'boost_strength_factor': 0.9,
@@ -267,66 +279,17 @@ FIRST_EPOCH_BATCH_SIZE = 4
 
 os.makedirs(output_folder + '/checkpoint', exist_ok=True)
 checkpoint_num = 1
-for epoch in range(N_epochs):
-  
-  test_flag=0
-  CNN_net.train()
-  DNN1_net.train()
-  DNN2_net.train()
- 
-  loss_sum=0
-  err_sum=0
+# noise_list = [0.0, 0.001, 0.002, 0.003, 0.004, 0.005, 0.006, 0.007, 0.008, 0.009, 0.01]
+# noise_list = [0.011, 0.012, 0.013, 0.014, 0.015, 0.016, 0.017, 0.018, 0.019, 0.02]
+s = 0.00
+s = s+0.001
+noise_list = [round(s+i*0.001,3) for i in range(0, 10)]
+print(noise_list)
+for noise in noise_list:
+   # AddNoiseInstance = AddNoise(noise)
 
-  if use_kwinners:
-    if epoch == 0:
-      batch_size = FIRST_EPOCH_BATCH_SIZE
-    else:
-      batch_size = int(options.batch_size)
+   # Full Validation  new
 
-  for i in range(N_batches):
-    if use_kwinners:
-      CNN_net.apply(update_boost_strength) #update_boost_strength
-      DNN1_net.apply(update_boost_strength)
-      DNN2_net.apply(update_boost_strength)
-
-    [inp,lab]=create_batches_rnd(batch_size,data_folder,wav_lst_tr,snt_tr,wlen,lab_dict,0.2)
-    pout=DNN2_net(DNN1_net(CNN_net(inp)))
-
-    # plot_filter(CNN_net) # huchida: PLOT METHOD
-
-    pred=torch.max(pout,dim=1)[1]
-    loss = cost(pout, lab.long())
-    err = torch.mean((pred!=lab.long()).float())
-
-
-
-    optimizer_CNN.zero_grad()
-    optimizer_DNN1.zero_grad()
-    optimizer_DNN2.zero_grad()
-
-    if use_kwinners:
-      CNN_net.apply(rezero_weights) #rezero_weights
-      DNN1_net.apply(rezero_weights)
-      DNN2_net.apply(rezero_weights)
-
-    loss.backward()
-    optimizer_CNN.step()
-    optimizer_DNN1.step()
-    optimizer_DNN2.step()
-
-    loss_sum=loss_sum+loss.detach()
-    err_sum=err_sum+err.detach()
-
-
-  loss_tot=loss_sum/N_batches
-  err_tot=err_sum/N_batches
-  
- 
-   
-   
-# Full Validation  new  
-  if epoch%N_eval_epoch==0:
-      
    CNN_net.eval()
    DNN1_net.eval()
    DNN2_net.eval()
@@ -343,6 +306,8 @@ for epoch in range(N_epochs):
 
      [signal, fs] = sf.read(data_folder+wav_lst_te[i])
 
+     AddNoiseInstance = AddNoise(noise,signal.max())
+     signal=AddNoiseInstance(signal)
      signal=torch.from_numpy(signal).float().cuda().contiguous()
      lab_batch=lab_dict[wav_lst_te[i]]
     
@@ -396,20 +361,4 @@ for epoch in range(N_epochs):
     err_tot_dev=err_sum/snt_te
 
   
-   print("epoch %i, loss_tr=%f err_tr=%f loss_te=%f err_te=%f err_te_snt=%f" % (epoch, loss_tot,err_tot,loss_tot_dev,err_tot_dev,err_tot_dev_snt))
-  
-   with open(output_folder+"/res.res", "a") as res_file:
-    res_file.write("epoch %i, loss_tr=%f err_tr=%f loss_te=%f err_te=%f err_te_snt=%f\n" % (epoch, loss_tot,err_tot,loss_tot_dev,err_tot_dev,err_tot_dev_snt))   
-
-   checkpoint={'CNN_model_par': CNN_net.state_dict(),
-               'DNN1_model_par': DNN1_net.state_dict(),
-               'DNN2_model_par': DNN2_net.state_dict(),
-               }
-   # torch.save(checkpoint,output_folder+'/model_raw.pkl')
-   torch.save(checkpoint, output_folder + '/checkpoint/model_raw_{}.pkl'.format(checkpoint_num))
-   checkpoint_num += 1
-
-  else:
-   print("epoch %i, loss_tr=%f err_tr=%f" % (epoch, loss_tot,err_tot))
-
-
+   print("noise %f, loss_te=%f err_te=%f err_te_snt=%f" % (noise, loss_tot_dev,err_tot_dev,err_tot_dev_snt))
