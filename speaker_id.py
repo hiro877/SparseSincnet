@@ -21,7 +21,7 @@ from torch.autograd import Variable
 
 import sys
 import numpy as np
-from dnn_models import MLP,flip
+from dnn_models import MLP,flip,MLP_NupicTorch
 from dnn_models import SincNet as CNN 
 from data_io import ReadList,read_conf,str_to_bool
 
@@ -206,7 +206,6 @@ CNN_net.cuda()
 lab_dict=np.load(class_dict_file, allow_pickle=True).item()
 
 
-
 DNN1_arch = {'input_dim': CNN_net.out_dim,
           'fc_lay': fc_lay,
           'fc_drop': fc_drop, 
@@ -215,16 +214,16 @@ DNN1_arch = {'input_dim': CNN_net.out_dim,
           'fc_use_laynorm_inp': fc_use_laynorm_inp,
           'fc_use_batchnorm_inp':fc_use_batchnorm_inp,
           'fc_act': fc_act,
-          'use_kwinners': use_kwinners,
-          'sparsity': 0.8,
-          'percent_on': 0.6,
+          'use_kwinners': True,#use_kwinners
+          'sparsity': 0.2, #0.5,
+          'percent_on': 0.7,
           # 'boost_strength': 1.0,
           # 'boost_strength_factor': 0.9,
           # 'k_inference_factor': 1.0,
           # 'duty_cycle_period': 1000,
              }
 
-DNN1_net=MLP(DNN1_arch)
+DNN1_net=MLP_NupicTorch(DNN1_arch)
 DNN1_net.cuda()
 
 
@@ -236,8 +235,8 @@ DNN2_arch = {'input_dim':fc_lay[-1] ,
           'fc_use_laynorm_inp': class_use_laynorm_inp,
           'fc_use_batchnorm_inp':class_use_batchnorm_inp,
           'fc_act': class_act,
-          'use_kwinners': use_kwinners,
-          'sparsity': 0.8, #0.3
+          'use_kwinners': False,#use_kwinners
+          'sparsity': 0.2, #0.3
           'percent_on': 0.6,
           # 'boost_strength': 1.0,
           # 'boost_strength_factor': 0.9,
@@ -256,7 +255,13 @@ if pt_file!='none':
    DNN1_net.load_state_dict(checkpoint_load['DNN1_model_par'])
    DNN2_net.load_state_dict(checkpoint_load['DNN2_model_par'])
 
-
+with open(output_folder + "/res.res", "a") as res_file:
+    res_file.write(str(CNN_net)+"\n")
+    res_file.write("====================\n\n")
+    res_file.write(str(DNN1_net) + "\n")
+    res_file.write("====================\n\n")
+    res_file.write(str(DNN2_net) + "\n")
+    res_file.write("====================\n\n")
 
 optimizer_CNN = optim.RMSprop(CNN_net.parameters(), lr=lr,alpha=0.95, eps=1e-8) 
 optimizer_DNN1 = optim.RMSprop(DNN1_net.parameters(), lr=lr,alpha=0.95, eps=1e-8) 
@@ -278,7 +283,7 @@ for epoch in range(N_epochs):
   err_sum=0
 
   if use_kwinners:
-    if epoch == 0:
+    if epoch < 1:  #if epoch == 0:
       batch_size = FIRST_EPOCH_BATCH_SIZE
     else:
       batch_size = int(options.batch_size)

@@ -46,13 +46,34 @@ class AddNoise(object):
         )
         return data * (1 - self.alpha) + noise_vector * self.alpha
 
+import numpy as np
+def min_max(x, axis=None):
+    min = x.min(axis=axis, keepdims=True)
+    max = x.max(axis=axis, keepdims=True)
+    result = (x-min)/(max-min)
+    return result
+
 def plot_filter(cnn_net):
-    sincnet = cnn_net.conv[0]
+    FIRST_EPOCH_BATCH_SIZE = 4
+
+    batch_size = FIRST_EPOCH_BATCH_SIZE
+    # batch_size = int(options.batch_size)
+    [inp, lab] = create_batches_rnd(batch_size, data_folder, wav_lst_tr, snt_tr, wlen, lab_dict, 0.2)
+    # pout = DNN2_net(DNN1_net(CNN_net(inp)))
+    # cnn_net.conv[0].make_filters(inp)
+
+
+    sinc_conv = cnn_net.conv[0]
+    sinc_conv.make_filters(inp)
 
     filter_num = 1
     F_amplitude_all = np.zeros(126)
-    for filter in sincnet.filters:
+    for filter in sinc_conv.filters:
         x = filter[0].to('cpu').detach().numpy().copy()
+        x = x[:-1]
+        # print(x[:-1].shape)
+        # plt.plot(x)
+        # plt.show()
 
         # 高速フーリエ変換(FFT)
         F = np.fft.fft(x)
@@ -61,10 +82,17 @@ def plot_filter(cnn_net):
         # 調整
         F_amplitude = amplitude / x.shape * 2
         F_amplitude[0] = F_amplitude[0] / 2
+        # plt.plot(F_amplitude[:int(x.shape[0] / 2) + 1])
+        # plt.show()
 
         F_amplitude_all = F_amplitude_all + F_amplitude[:int(x.shape[0] / 2) + 1]
         filter_num += 1
     frequency_axis = np.linspace(0, 4000, int(x.shape[0] / 2) + 1)
+    print(frequency_axis, x.shape)
+    plot_y = F_amplitude_all / filter_num
+    plot_y = min_max(plot_y)
+    for y in plot_y:
+        print(y)
     plt.plot(frequency_axis, F_amplitude_all / filter_num)
     plt.show()
     sys.exit()
@@ -228,7 +256,7 @@ DNN1_arch = {'input_dim': CNN_net.out_dim,
           'fc_use_batchnorm_inp':fc_use_batchnorm_inp,
           'fc_act': fc_act,
           'use_kwinners': True,
-          'sparsity': 0.5, #0.8
+          'sparsity': 0.2, #0.8
           'percent_on': 0.7, #0.6
           # 'boost_strength': 1.0,
           # 'boost_strength_factor': 0.9,
@@ -268,103 +296,76 @@ if pt_file!='none':
    DNN1_net.load_state_dict(checkpoint_load['DNN1_model_par'])
    DNN2_net.load_state_dict(checkpoint_load['DNN2_model_par'])
 
+optimizer_CNN = optim.RMSprop(CNN_net.parameters(), lr=lr, alpha=0.95, eps=1e-8)
+optimizer_DNN1 = optim.RMSprop(DNN1_net.parameters(), lr=lr, alpha=0.95, eps=1e-8)
+optimizer_DNN2 = optim.RMSprop(DNN2_net.parameters(), lr=lr, alpha=0.95, eps=1e-8)
 
-
-optimizer_CNN = optim.RMSprop(CNN_net.parameters(), lr=lr,alpha=0.95, eps=1e-8) 
-optimizer_DNN1 = optim.RMSprop(DNN1_net.parameters(), lr=lr,alpha=0.95, eps=1e-8) 
-optimizer_DNN2 = optim.RMSprop(DNN2_net.parameters(), lr=lr,alpha=0.95, eps=1e-8)
+plot_filter(CNN_net)  # huchida: PLOT METHOD
+sys.exit()
 
 # HTM Param
 FIRST_EPOCH_BATCH_SIZE = 4
+for epoch in range(1):
+    test_flag = 0
+    CNN_net.train()
+    DNN1_net.train()
+    DNN2_net.train()
+    loss_sum = 0
+    err_sum = 0
+    batch_size = FIRST_EPOCH_BATCH_SIZE
 
-os.makedirs(output_folder + '/checkpoint', exist_ok=True)
-checkpoint_num = 1
-# noise_list = [0.0, 0.001, 0.002, 0.003, 0.004, 0.005, 0.006, 0.007, 0.008, 0.009, 0.01]
-# noise_list = [0.011, 0.012, 0.013, 0.014, 0.015, 0.016, 0.017, 0.018, 0.019, 0.02]
-s = 0.00
-s = s+0.001
-noise_list = [round(s+i*0.001,3) for i in range(0, 100)]
-print(noise_list)
-err_tot_dev_snt_all=[]
-for noise in noise_list:
-   # AddNoiseInstance = AddNoise(noise)
+    for i in range(N_batches):
+        if use_kwinners:
+            CNN_net.apply(update_boost_strength)  # update_boost_strength
+            DNN1_net.apply(update_boost_strength)
+            DNN2_net.apply(update_boost_strength)
 
-   # Full Validation  new
+        [inp, lab] = create_batches_rnd(batch_size, data_folder, wav_lst_tr, snt_tr, wlen, lab_dict, 0.2)
+        pout = DNN2_net(DNN1_net(CNN_net(inp)))
+        plot_filter(CNN_net)  # huchida: PLOT METHOD
+sys.exit()
 
-   CNN_net.eval()
-   DNN1_net.eval()
-   DNN2_net.eval()
-   test_flag=1 
-   loss_sum=0
-   err_sum=0
-   err_sum_snt=0
-   
-   with torch.no_grad():  
-    for i in range(snt_te):
-       
-     #[fs,signal]=scipy.io.wavfile.read(data_folder+wav_lst_te[i])
-     #signal=signal.astype(float)/32768
+# for param_tensor in CNN_net.state_dict():
+#     a = CNN_net.state_dict()[param_tensor].size()
+#     print(param_tensor, "\t", CNN_net.state_dict()[param_tensor].size())
+#     if("kwinners" in param_tensor):
+#         print(CNN_net.state_dict()[param_tensor])
 
-     [signal, fs] = sf.read(data_folder+wav_lst_te[i])
+"""
+Sinc Filter
+"""
+# kernel_weight = CNN_net.state_dict()['conv.0.low_hz_']
+# print(kernel_weight)
+# kernel_weight = CNN_net.state_dict()['conv.0.band_hz_']
+# print(kernel_weight)
 
-     AddNoiseInstance = AddNoise(noise,signal.max())
-     signal=AddNoiseInstance(signal)
-     signal=torch.from_numpy(signal).float().cuda().contiguous()
-     lab_batch=lab_dict[wav_lst_te[i]]
-    
-     # split signals into chunks
-     beg_samp=0
-     end_samp=wlen
-     
-     N_fr=int((signal.shape[0]-wlen)/(wshift))
-     
+# kernel_weight = CNN_net.state_dict()['conv.1.zero_mask']
+# print("conv.1.zero_mask")
+# print(kernel_weight)
+# kernel_weight = CNN_net.state_dict()['conv.1.module.weight']
+# print("conv.1.module.weight")
+# print(kernel_weight)
+# print("conv.1.module.bias")
+# kernel_weight = CNN_net.state_dict()['conv.1.module.bias']
+# print(kernel_weight)
 
-     sig_arr=torch.zeros([Batch_dev,wlen]).float().cuda().contiguous()
-     lab= Variable((torch.zeros(N_fr+1)+lab_batch).cuda().contiguous().long())
-     pout=Variable(torch.zeros(N_fr+1,class_lay[-1]).float().cuda().contiguous())
-     count_fr=0
-     count_fr_tot=0
-     while end_samp<signal.shape[0]:
-         sig_arr[count_fr,:]=signal[beg_samp:end_samp]
-         beg_samp=beg_samp+wshift
-         end_samp=beg_samp+wlen
-         count_fr=count_fr+1
-         count_fr_tot=count_fr_tot+1
-         if count_fr==Batch_dev:
-             inp=Variable(sig_arr)
-             pout[count_fr_tot-Batch_dev:count_fr_tot,:]=DNN2_net(DNN1_net(CNN_net(inp)))
-             count_fr=0
-             sig_arr=torch.zeros([Batch_dev,wlen]).float().cuda().contiguous()
-   
-     if count_fr>0:
-      inp=Variable(sig_arr[0:count_fr])
-      pout[count_fr_tot-count_fr:count_fr_tot,:]=DNN2_net(DNN1_net(CNN_net(inp)))
 
-    
-     pred=torch.max(pout,dim=1)[1]
-     loss = cost(pout, lab.long())
-     # print("pred: {}, lab.long(): {}".format(pred, lab.long()))
-     # print((pred!=lab.long()).float())
-     err = torch.mean((pred!=lab.long()).float())
+for param_tensor in DNN1_net.state_dict():
+    print(param_tensor, "\t", DNN1_net.state_dict()[param_tensor].size())
+    if("kwinners" in param_tensor):
+        print(DNN1_net.state_dict()[param_tensor])
 
-     # print("pout: {}, torch.sum(pout,dim=0): {}".format(pout, torch.sum(pout,dim=0)))
-     pout0 = torch.sum(pout,dim=0)
-     [val,best_class]=torch.max(torch.sum(pout,dim=0),0)
-     # print("best_class: {}, lab[0]: {}".format(best_class, lab[0]))
-     err_sum_snt=err_sum_snt+(best_class!=lab[0]).float()
-    
-    
-     loss_sum=loss_sum+loss.detach()
-     err_sum=err_sum+err.detach()
-    
-    err_tot_dev_snt=err_sum_snt/snt_te
-    loss_tot_dev=loss_sum/snt_te
-    err_tot_dev=err_sum/snt_te
 
-  
-   print("noise %f, loss_te=%f err_te=%f err_te_snt=%f" % (noise, loss_tot_dev,err_tot_dev,err_tot_dev_snt))
+kernel_weight = DNN1_net.state_dict()['wx.0.module.weight']
+print("wx.0.module.weight")
+print(kernel_weight)
+print(torch.count_nonzero(kernel_weight))
 
-   err_tot_dev_snt_all.append(err_tot_dev_snt)
-print("================ Add Noise Result ================")
-for i in err_tot_dev_snt_all:
-    print(i)
+kernel_weight = DNN1_net.state_dict()['kwinners.0.duty_cycle']
+print("kwinners.0.duty_cycle")
+print(kernel_weight)
+print(torch.count_nonzero(kernel_weight))
+
+plot_filter(CNN_net)
+
+sys.exit()

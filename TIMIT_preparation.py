@@ -75,6 +75,7 @@ for i in range(len(list_sig)):
  # Save normalized speech
  file_out=out_folder+'/'+list_sig[i]
 
+ os.makedirs('/'.join(file_out.split('/')[:-1]), exist_ok=True)
  sf.write(file_out, signal, fs)
  
  print("Done %s" % (file_out))

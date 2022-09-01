@@ -228,7 +228,7 @@ DNN1_arch = {'input_dim': CNN_net.out_dim,
           'fc_use_batchnorm_inp':fc_use_batchnorm_inp,
           'fc_act': fc_act,
           'use_kwinners': True,
-          'sparsity': 0.5, #0.8
+          'sparsity': 0.2, #0.8, 0.5, 0.2
           'percent_on': 0.7, #0.6
           # 'boost_strength': 1.0,
           # 'boost_strength_factor': 0.9,
@@ -267,6 +267,18 @@ if pt_file!='none':
    CNN_net.load_state_dict(checkpoint_load['CNN_model_par'])
    DNN1_net.load_state_dict(checkpoint_load['DNN1_model_par'])
    DNN2_net.load_state_dict(checkpoint_load['DNN2_model_par'])
+# for param_tensor in CNN_net.state_dict():
+#     a = CNN_net.state_dict()[param_tensor].size()
+#     print(param_tensor, "\t", CNN_net.state_dict()[param_tensor].size())
+#     if("kwinners" in param_tensor):
+#         print(CNN_net.state_dict()[param_tensor])
+
+# for param_tensor in DNN1_net.state_dict():
+#     print(param_tensor, "\t", DNN1_net.state_dict()[param_tensor].size())
+#     if("kwinners" in param_tensor):
+#         print(DNN1_net.state_dict()[param_tensor])
+# sys.exit()
+
 
 
 
@@ -281,90 +293,77 @@ os.makedirs(output_folder + '/checkpoint', exist_ok=True)
 checkpoint_num = 1
 # noise_list = [0.0, 0.001, 0.002, 0.003, 0.004, 0.005, 0.006, 0.007, 0.008, 0.009, 0.01]
 # noise_list = [0.011, 0.012, 0.013, 0.014, 0.015, 0.016, 0.017, 0.018, 0.019, 0.02]
-s = 0.00
-s = s+0.001
-noise_list = [round(s+i*0.001,3) for i in range(0, 100)]
-print(noise_list)
-err_tot_dev_snt_all=[]
-for noise in noise_list:
-   # AddNoiseInstance = AddNoise(noise)
 
    # Full Validation  new
 
-   CNN_net.eval()
-   DNN1_net.eval()
-   DNN2_net.eval()
-   test_flag=1 
-   loss_sum=0
-   err_sum=0
-   err_sum_snt=0
-   
-   with torch.no_grad():  
+CNN_net.eval()
+DNN1_net.eval()
+DNN2_net.eval()
+test_flag=1
+loss_sum=0
+err_sum=0
+err_sum_snt=0
+
+with torch.no_grad():
     for i in range(snt_te):
-       
+
      #[fs,signal]=scipy.io.wavfile.read(data_folder+wav_lst_te[i])
      #signal=signal.astype(float)/32768
 
-     [signal, fs] = sf.read(data_folder+wav_lst_te[i])
+        [signal, fs] = sf.read(data_folder+wav_lst_te[i])
 
-     AddNoiseInstance = AddNoise(noise,signal.max())
-     signal=AddNoiseInstance(signal)
-     signal=torch.from_numpy(signal).float().cuda().contiguous()
-     lab_batch=lab_dict[wav_lst_te[i]]
-    
-     # split signals into chunks
-     beg_samp=0
-     end_samp=wlen
-     
-     N_fr=int((signal.shape[0]-wlen)/(wshift))
-     
+        signal=torch.from_numpy(signal).float().cuda().contiguous()
+        lab_batch=lab_dict[wav_lst_te[i]]
 
-     sig_arr=torch.zeros([Batch_dev,wlen]).float().cuda().contiguous()
-     lab= Variable((torch.zeros(N_fr+1)+lab_batch).cuda().contiguous().long())
-     pout=Variable(torch.zeros(N_fr+1,class_lay[-1]).float().cuda().contiguous())
-     count_fr=0
-     count_fr_tot=0
-     while end_samp<signal.shape[0]:
-         sig_arr[count_fr,:]=signal[beg_samp:end_samp]
-         beg_samp=beg_samp+wshift
-         end_samp=beg_samp+wlen
-         count_fr=count_fr+1
-         count_fr_tot=count_fr_tot+1
-         if count_fr==Batch_dev:
-             inp=Variable(sig_arr)
-             pout[count_fr_tot-Batch_dev:count_fr_tot,:]=DNN2_net(DNN1_net(CNN_net(inp)))
-             count_fr=0
-             sig_arr=torch.zeros([Batch_dev,wlen]).float().cuda().contiguous()
-   
-     if count_fr>0:
-      inp=Variable(sig_arr[0:count_fr])
-      pout[count_fr_tot-count_fr:count_fr_tot,:]=DNN2_net(DNN1_net(CNN_net(inp)))
+        # split signals into chunks
+        beg_samp=0
+        end_samp=wlen
 
-    
-     pred=torch.max(pout,dim=1)[1]
-     loss = cost(pout, lab.long())
-     # print("pred: {}, lab.long(): {}".format(pred, lab.long()))
-     # print((pred!=lab.long()).float())
-     err = torch.mean((pred!=lab.long()).float())
+        N_fr=int((signal.shape[0]-wlen)/(wshift))
 
-     # print("pout: {}, torch.sum(pout,dim=0): {}".format(pout, torch.sum(pout,dim=0)))
-     pout0 = torch.sum(pout,dim=0)
-     [val,best_class]=torch.max(torch.sum(pout,dim=0),0)
-     # print("best_class: {}, lab[0]: {}".format(best_class, lab[0]))
-     err_sum_snt=err_sum_snt+(best_class!=lab[0]).float()
-    
-    
-     loss_sum=loss_sum+loss.detach()
-     err_sum=err_sum+err.detach()
-    
+
+        sig_arr=torch.zeros([Batch_dev,wlen]).float().cuda().contiguous()
+        lab= Variable((torch.zeros(N_fr+1)+lab_batch).cuda().contiguous().long())
+        pout=Variable(torch.zeros(N_fr+1,class_lay[-1]).float().cuda().contiguous())
+        count_fr=0
+        count_fr_tot=0
+        while end_samp<signal.shape[0]:
+            sig_arr[count_fr,:]=signal[beg_samp:end_samp]
+            beg_samp=beg_samp+wshift
+            end_samp=beg_samp+wlen
+            count_fr=count_fr+1
+            count_fr_tot=count_fr_tot+1
+            if count_fr==Batch_dev:
+                inp=Variable(sig_arr)
+                pout[count_fr_tot-Batch_dev:count_fr_tot,:]=DNN2_net(DNN1_net(CNN_net(inp)))
+                count_fr=0
+                sig_arr=torch.zeros([Batch_dev,wlen]).float().cuda().contiguous()
+
+        if count_fr>0:
+            inp=Variable(sig_arr[0:count_fr])
+            pout[count_fr_tot-count_fr:count_fr_tot,:]=DNN2_net(DNN1_net(CNN_net(inp)))
+
+
+        pred=torch.max(pout,dim=1)[1]
+        loss = cost(pout, lab.long())
+        # print("pred: {}, lab.long(): {}".format(pred, lab.long()))
+        # print((pred!=lab.long()).float())
+        err = torch.mean((pred!=lab.long()).float())
+
+        # print("pout: {}, torch.sum(pout,dim=0): {}".format(pout, torch.sum(pout,dim=0)))
+        pout0 = torch.sum(pout,dim=0)
+        [val,best_class]=torch.max(torch.sum(pout,dim=0),0)
+        # print("best_class: {}, lab[0]: {}".format(best_class, lab[0]))
+        err_sum_snt=err_sum_snt+(best_class!=lab[0]).float()
+
+
+        loss_sum=loss_sum+loss.detach()
+        err_sum=err_sum+err.detach()
+
     err_tot_dev_snt=err_sum_snt/snt_te
     loss_tot_dev=loss_sum/snt_te
     err_tot_dev=err_sum/snt_te
 
-  
-   print("noise %f, loss_te=%f err_te=%f err_te_snt=%f" % (noise, loss_tot_dev,err_tot_dev,err_tot_dev_snt))
 
-   err_tot_dev_snt_all.append(err_tot_dev_snt)
-print("================ Add Noise Result ================")
-for i in err_tot_dev_snt_all:
-    print(i)
+print("loss_te=%f err_te=%f err_te_snt=%f" % (loss_tot_dev,err_tot_dev,err_tot_dev_snt))
+# print(err_tot_dev_snt)
