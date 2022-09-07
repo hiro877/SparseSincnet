@@ -1,3 +1,4 @@
+README under construction  
 
 # SparseSincNet
 SparseSincNet is Built with SincNet[1] and Nupic.torch[2]
