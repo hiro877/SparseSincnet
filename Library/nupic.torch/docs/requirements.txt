@@ -1,0 +1,4 @@
+docutils>=0.17
+sphinx>=2
+sphinx-autobuild
+myst-parser
